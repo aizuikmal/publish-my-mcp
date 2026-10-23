@@ -7,23 +7,43 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export const DEPLOY_URL = 'https://api.publish.my/v1/deploy';
 export const INSTRUCTIONS_URL = 'https://publish.my/llms.txt';
 const BREADCRUMB = '.publish-my.json';
+
+export const PROJECT_ID_RE = /^88[a-z2-9]{8}$/;
+export const isProjectId = (id) => typeof id === 'string' && PROJECT_ID_RE.test(id);
 
 export function paths(home = os.homedir()) {
   return {
     key: path.join(home, '.publishmy'),
     pendingDir: path.join(home, '.config', 'publish-my'),
     pending: path.join(home, '.config', 'publish-my', 'pending.json'),
+    siteKeys: path.join(home, '.config', 'publish-my', 'keys'),
   };
+}
+
+// Write via a fresh temp file + rename. 'wx' never opens an existing path (so never follows a
+// symlink), and rename replaces the directory entry itself: a symlink planted at `file` (say a
+// cloned repo's .publish-my.json -> ~/.zshrc) is replaced, its target is never written.
+async function atomicWrite(file, text, mode) {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  await fs.writeFile(tmp, text, { flag: 'wx', mode });
+  try { await fs.rename(tmp, file); } catch (e) { await fs.rm(tmp, { force: true }); throw e; }
 }
 
 async function writePrivate(file, text) {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fs.writeFile(file, text, { mode: 0o600 });
-  await fs.chmod(file, 0o600); // writeFile's mode only applies when the file is created
+  await atomicWrite(file, text, 0o600);
+}
+
+// Reads a regular file only: a symlink is treated as absent.
+async function readRegular(file) {
+  const st = await fs.lstat(file);
+  if (!st.isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  return fs.readFile(file, 'utf8');
 }
 
 // ---- API key ----
@@ -33,6 +53,18 @@ export async function readKey({ env = process.env, home } = {}) {
 }
 export async function saveKey(key, { home } = {}) {
   await writePrivate(paths(home).key, key.trim() + '\n');
+}
+// A key for one site whose account differs from the account of ~/.publishmy (kept aside, never
+// replacing the main key).
+export async function readSiteKey(projectId, { home } = {}) {
+  if (!isProjectId(projectId)) return null;
+  try { return (await readRegular(path.join(paths(home).siteKeys, projectId))).trim() || null; } catch { return null; }
+}
+export async function saveSiteKey(projectId, key, { home } = {}) {
+  if (!isProjectId(projectId)) throw new Error('bad project id');
+  const file = path.join(paths(home).siteKeys, projectId);
+  await writePrivate(file, key.trim() + '\n');
+  return file;
 }
 
 // ---- pending (staged, not yet activated) ----
@@ -72,8 +104,8 @@ export async function findBreadcrumb(siteDir, opts = {}) {
   for (const dir of [...new Set([site, root])]) {
     const file = path.join(dir, BREADCRUMB);
     let data;
-    try { data = JSON.parse(await fs.readFile(file, 'utf8')); } catch { continue; }
-    if (!data || typeof data.project_id !== 'string') continue;
+    try { data = JSON.parse(await readRegular(file)); } catch { continue; }
+    if (!data || !isProjectId(data.project_id)) continue;
     // No site_path (written by the curl flow): it only identifies the folder it sits in, since
     // nothing says which subfolder that flow packed. Guessing could overwrite a different site.
     if ((data.site_path || '.') !== rel(dir, site)) continue;
@@ -91,7 +123,7 @@ export async function writeBreadcrumb(siteDir, { projectId, url }, opts = {}) {
   else {
     const root = await projectRoot(site, opts);
     // Do not clobber another site's breadcrumb at the project root.
-    const atRoot = await fs.readFile(path.join(root, BREADCRUMB), 'utf8').then(JSON.parse, () => null);
+    const atRoot = await readRegular(path.join(root, BREADCRUMB)).then(JSON.parse, () => null);
     dir = atRoot && atRoot.project_id !== projectId ? site : root;
   }
   const data = {
@@ -99,6 +131,6 @@ export async function writeBreadcrumb(siteDir, { projectId, url }, opts = {}) {
     deploy: DEPLOY_URL, instructions: INSTRUCTIONS_URL, site_path: rel(dir, site),
   };
   const file = path.join(dir, BREADCRUMB);
-  await fs.writeFile(file, JSON.stringify(data, null, 2) + '\n');
+  await atomicWrite(file, JSON.stringify(data, null, 2) + '\n', 0o644);
   return file;
 }

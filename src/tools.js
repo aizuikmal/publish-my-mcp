@@ -5,42 +5,66 @@ import { packFolder, PackError } from './pack.js';
 import * as state from './state.js';
 
 const CONSOLE_URL = 'https://console.publish.my';
+const BAD_ID = (id) => ({ isError: true, text: `${JSON.stringify(clean(id, 40))} is not a publish.my site id (it looks like 88 followed by 8 letters/digits).`, data: { error: 'bad_project_id' } });
+
+// Text that comes from the user's folder (file names) or the server goes back to the model, so
+// strip control/format characters, cap the length, and quote file names: they are data.
+const clean = (s, max = 200) => String(s ?? '').replace(/[\p{Cc}\p{Cf}]+/gu, ' ').slice(0, max);
+const quoted = (s) => JSON.stringify(clean(s, 120));
 
 function apiError(r, { projectId } = {}) {
-  const code = r.body?.error?.code || `http_${r.status}`;
-  const message = r.body?.error?.message || 'unexpected response';
+  const code = clean(r.body?.error?.code || `http_${r.status}`, 60);
+  const message = clean(r.body?.error?.message || 'unexpected response');
   if (r.status === 0) return message;
   if (r.status === 429) return `publish.my is rate-limiting this request. Wait ${r.retryAfter || 'a few'} seconds and try again.`;
   if (code === 'storage_limit_reached') return 'This account is out of storage (500 MB free). Delete an old site at https://console.publish.my, then publish again.';
   if ((r.status === 401 || r.status === 403) && projectId) {
     return `publish.my refused the update to ${projectId} (${code}: ${message}). If this is the user's site and the key was lost, call reconnect_site.`;
   }
-  const paths = Array.isArray(r.body?.paths) && r.body.paths.length ? ` Files: ${r.body.paths.slice(0, 20).join(', ')}` : '';
+  const paths = Array.isArray(r.body?.paths) && r.body.paths.length ? ` Files: ${r.body.paths.slice(0, 20).map(quoted).join(', ')}` : '';
   return `${code}: ${message}${paths}`;
 }
 
 const fmtSkipped = (skipped) => skipped.length
-  ? `Left out ${skipped.length} file(s): ${skipped.slice(0, 15).map((s) => `${s.path} (${s.reason})`).join(', ')}${skipped.length > 15 ? ', …' : ''}.`
+  ? `Left out ${skipped.length} file(s): ${skipped.slice(0, 15).map((s) => `${quoted(s.path)} (${s.reason})`).join(', ')}${skipped.length > 15 ? ', …' : ''}.`
   : '';
 
 export function createTools({ api, home, env = process.env, pollIntervalMs = 10_000, pollTimeoutMs = 30 * 60_000, log = () => {} }) {
   const opts = { home, env };
   const watchers = new Map(); // projectId -> timer
 
-  // One exchange poll. Saves the key on success. Returns 'live' | 'pending' | 'expired' | 'error'.
+  // Decides where a freshly issued key goes. ~/.publishmy is only (re)written when it is empty or
+  // its key is dead. If it already holds a working key for a DIFFERENT account (say the site was
+  // claimed or relinked by someone else's email), that key is kept and the new one is stored for
+  // this site only, so one activation can never silently switch the machine's account.
+  async function storeKey(projectId, newKey) {
+    const active = await state.readKey(opts);
+    if (!active || active === newKey) { await state.saveKey(newKey, opts); return 'live'; }
+    const cur = await api.me(active);
+    if (cur.status === 401 && !env.PUBLISHMY_API_KEY) { await state.saveKey(newKey, opts); return 'live'; }
+    if (cur.status === 200) {
+      const next = await api.me(newKey);
+      if (next.status === 200 && next.body?.email && next.body.email === cur.body?.email) return 'live'; // same account: keep the existing key
+    }
+    await state.saveSiteKey(projectId, newKey, opts);
+    return 'other_account';
+  }
+
+  // One exchange poll. Saves the key on success. Returns 'live' | 'other_account' | 'pending' | 'expired' | 'error' | 'unsaved'.
   async function pollOnce(projectId, token) {
     const r = await api.exchange(token);
     if (r.status === 200 && r.body.api_key) {
       // The server hands the key out once: if it can't be saved, say so rather than lose it quietly.
-      try { await state.saveKey(r.body.api_key, opts); } catch (e) {
+      let s;
+      try { s = await storeKey(projectId, r.body.api_key); } catch (e) {
         stopWatching(projectId);
-        log(`publish.my: ${projectId} activated, but saving ~/.publishmy failed: ${e.message}`);
+        log(`publish.my: ${projectId} activated, but saving its key failed: ${e.message}`);
         return 'unsaved';
       }
       await state.setPending(projectId, null, opts).catch(() => {});
       stopWatching(projectId);
-      log(`publish.my: ${projectId} activated; API key saved to ~/.publishmy`);
-      return 'live';
+      log(`publish.my: ${projectId} activated; ${s === 'live' ? 'API key in ~/.publishmy' : 'key for a different account saved under ~/.config/publish-my/keys/'}`);
+      return s;
     }
     if (r.status === 202) return 'pending';
     if (r.status === 410 || r.status === 404) {
@@ -70,7 +94,10 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
     watchers.set(projectId, t);
   }
 
+  const keyFor = async (projectId) => (projectId && await state.readSiteKey(projectId, opts)) || state.readKey(opts);
+
   async function publishSite({ path: sitePath, project_id: projectIdArg, confirm_update: confirm = false, new_site: forceNew = false }) {
+    if (projectIdArg && !state.isProjectId(projectIdArg)) return BAD_ID(projectIdArg);
     const site = path.resolve(sitePath);
     let packed;
     try { packed = await packFolder(site); } catch (e) {
@@ -80,7 +107,6 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
 
     const crumb = forceNew ? null : await state.findBreadcrumb(site, opts);
     let projectId = projectIdArg || crumb?.data.project_id || null;
-    const key = await state.readKey(opts);
     const pending = projectId ? (await state.readPending(opts))[projectId] : null;
 
     let staleNote = ''; let staged = false;
@@ -112,6 +138,7 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
         data: { error: 'staged_no_secret', project_id: projectId },
       };
     }
+    const key = await keyFor(projectId);
     if (projectId && !staged && !key) {
       return {
         isError: true,
@@ -134,7 +161,7 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
     try { breadcrumb = await state.writeBreadcrumb(site, { projectId: b.project_id, url: b.url }, opts); } catch (e) {
       crumbWarn = `\n\nCouldn't write .publish-my.json (${e.code || e.message}); to update this site later, pass project_id "${b.project_id}".`;
     }
-    const serverWarn = Array.isArray(b.warnings) && b.warnings.length ? ` Server notes: ${b.warnings.slice(0, 10).join('; ')}.` : '';
+    const serverWarn = Array.isArray(b.warnings) && b.warnings.length ? ` Server notes: ${b.warnings.slice(0, 10).map((w) => clean(w)).join('; ')}.` : '';
     const skipped = fmtSkipped(packed.skipped);
     const data = { status: b.status, project_id: b.project_id, url: b.url, files: packed.fileCount, breadcrumb, skipped: packed.skipped, warnings: b.warnings || [] };
 
@@ -151,6 +178,7 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
   }
 
   async function checkActivation({ project_id: only } = {}) {
+    if (only && !state.isProjectId(only)) return BAD_ID(only);
     const pending = await state.readPending(opts);
     const ids = only ? [only] : Object.keys(pending);
     if (!ids.length) {
@@ -166,6 +194,7 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
     }
     const line = (x) => ({
       live: `${x.project_id}: activated — live at ${x.url || `https://${x.project_id}.publish.my`}. Key saved to ~/.publishmy.`,
+      other_account: `${x.project_id}: activated — live at ${x.url || `https://${x.project_id}.publish.my`}, but on a DIFFERENT publish.my account than the key already on this machine. Kept the existing key in ~/.publishmy; this site's key was saved to ~/.config/publish-my/keys/${x.project_id} and is used only for updates to this site. Tell the user, in case they didn't expect another account.`,
       pending: `${x.project_id}: still waiting. The user needs to open ${x.url}, enter their email, and click the link in the email from publish.my (check spam).`,
       expired: `${x.project_id}: the activation window passed. If the user did activate, their key is at ${CONSOLE_URL}; otherwise publish again.`,
       unknown: `${x.project_id}: no pending activation recorded on this machine.`,
@@ -187,6 +216,7 @@ export function createTools({ api, home, env = process.env, pollIntervalMs = 10_
   }
 
   async function reconnectSite({ project_id: projectIdArg, path: sitePath }) {
+    if (projectIdArg && !state.isProjectId(projectIdArg)) return BAD_ID(projectIdArg);
     let projectId = projectIdArg;
     if (!projectId && sitePath) projectId = (await state.findBreadcrumb(path.resolve(sitePath), opts))?.data.project_id;
     if (!projectId) return { isError: true, text: 'Which site? Pass project_id (the part before .publish.my) or the path of a published folder.', data: { error: 'no_project' } };

@@ -58,7 +58,7 @@ let r = await call('publish_site', { path: site });
 const id = idFrom(r.text);
 ok(!r.isError && /enter your email/i.test(r.text), 'staged, tells the user to activate', r.text);
 ok(!!id, `project id ${id}`);
-ok(/\.env \(hidden file\)/.test(r.text), '.env reported as left out');
+ok(/"\.env" \(hidden file\)/.test(r.text), '.env reported as left out');
 const crumb = JSON.parse(fs.readFileSync(path.join(home, 'proj', '.publish-my.json'), 'utf8'));
 ok(crumb.project_id === id && crumb.site_path === 'site', 'breadcrumb at project root with site_path');
 ok(!fs.existsSync(path.join(home, '.publishmy')), 'no key yet');

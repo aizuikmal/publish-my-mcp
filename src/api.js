@@ -38,6 +38,7 @@ export function createApi({ baseUrl = process.env.PUBLISHMY_API_URL || 'https://
       const form = new FormData(); form.append('project_id', projectId);
       return call('POST', '/v1/agent/relink', { body: form });
     },
+    me(key) { return call('GET', '/v1/me', { headers: { Authorization: `Bearer ${key}` } }); },
     projects(key) { return call('GET', '/v1/projects', { headers: { Authorization: `Bearer ${key}` } }); },
     publicInfo(projectId) { return call('GET', `/v1/projects/${encodeURIComponent(projectId)}/public`); },
   };

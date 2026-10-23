@@ -55,6 +55,9 @@ There is no delete tool. Sites are deleted in the [console](https://console.publ
 The same files the [curl flow](https://publish.my/llms.txt) uses, so the two stay interchangeable:
 
 - `~/.publishmy`: your publish.my API key (mode 600), saved when you activate your first site.
+  A working key here is never replaced by a key for a different account.
+- `~/.config/publish-my/keys/<site id>` (mode 600): if a site gets activated on a different account
+  than the key in `~/.publishmy`, its key is kept here and used only for that site.
 - `<project>/.publish-my.json`: which publish.my site this folder is, so "publish again" updates
   the same address.
 - `~/.config/publish-my/pending.json` (mode 600): secrets for sites waiting for activation. It
