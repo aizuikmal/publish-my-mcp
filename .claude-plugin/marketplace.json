@@ -1,0 +1,11 @@
+{
+  "name": "publish-my",
+  "owner": { "name": "publish.my", "url": "https://publish.my" },
+  "plugins": [
+    {
+      "name": "publish-my",
+      "source": "./",
+      "description": "Publish any folder as a live website on publish.my. Free, no account needed to start."
+    }
+  ]
+}

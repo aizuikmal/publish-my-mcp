@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "publish-my": { "command": "npx", "args": ["-y", "publish-my"] }
+  }
+}

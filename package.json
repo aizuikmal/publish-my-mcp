@@ -1,0 +1,48 @@
+{
+  "name": "publish-my",
+  "version": "0.1.0",
+  "description": "MCP server for publish.my: publish a folder as a live website from Claude Code, Cursor, Codex, VS Code or any MCP client. Free, no account needed to start.",
+  "mcpName": "my.publish/publish-my",
+  "type": "module",
+  "bin": {
+    "publish-my": "src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "static-hosting",
+    "deploy",
+    "publish",
+    "website",
+    "claude",
+    "cursor",
+    "ai-agent"
+  ],
+  "homepage": "https://publish.my/agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aizuikmal/publish-my-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aizuikmal/publish-my-mcp/issues"
+  },
+  "license": "MIT",
+  "author": "Aisoft Technology",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "tar-stream": "^3.1.7",
+    "zod": "^3.25.76"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "my.publish/publish-my",
+  "title": "publish.my",
+  "description": "Publish a folder as a live website at https://<id>.publish.my. Free, no account needed.",
+  "version": "0.1.0",
+  "websiteUrl": "https://publish.my/agents/",
+  "repository": { "url": "https://github.com/aizuikmal/publish-my-mcp", "source": "github" },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "publish-my",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" }
+    }
+  ],
+  "remotes": [
+    { "type": "streamable-http", "url": "https://api.publish.my/mcp" }
+  ]
+}

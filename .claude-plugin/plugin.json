@@ -1,0 +1,8 @@
+{
+  "name": "publish-my",
+  "description": "Publish any folder as a live website on publish.my. Free, no account needed to start.",
+  "version": "0.1.0",
+  "author": { "name": "publish.my", "url": "https://publish.my" },
+  "homepage": "https://publish.my/agents/",
+  "keywords": ["publish", "deploy", "hosting", "static-site"]
+}
